@@ -1,0 +1,14 @@
+# Caddy fronts the matchmaking API with TLS.
+#
+# Local: defaults to `localhost`, for which Caddy serves its internal CA cert
+#   (https://localhost → matchmaking API).
+# Production: set MM_DOMAIN to your domain and Caddy auto-provisions a real
+#   Let's Encrypt certificate.
+#
+# Game-servers are reached directly on the published port range (ws:// and the
+# WebTransport UDP ports); they aren't proxied here because each match uses a
+# dynamically-allocated port.
+
+{$MM_DOMAIN:localhost} {
+	reverse_proxy manager:9000
+}

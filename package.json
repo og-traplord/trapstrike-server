@@ -1,0 +1,32 @@
+{
+  "name": "trapstrike-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "server": "tsx packages/game-server/src/index.ts",
+    "client": "tsx test-client/src/index.ts",
+    "demo": "tsx test-client/src/demo.ts",
+    "demo:m2": "LAT=80 JITTER=20 DROP=0.05 tsx test-client/src/demo.ts",
+    "demo:m3": "LAT=80 JITTER=30 DROP=0.1 tsx test-client/src/demo.ts",
+    "demo:m4": "LAT=80 JITTER=20 DROP=0.05 FIRE=1 tsx test-client/src/demo.ts",
+    "demo:m5": "FIRE=1 tsx test-client/src/demo.ts",
+    "demo:m5-ws": "FORCE_WS=1 FIRE=1 tsx test-client/src/demo.ts",
+    "demo:m6": "tsx test-client/src/mm-demo.ts",
+    "mm": "tsx packages/match-manager/src/index.ts",
+    "mm-client": "tsx test-client/src/mm-client.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

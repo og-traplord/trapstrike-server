@@ -1,0 +1,22 @@
+# Render Blueprint — deploys the TrapStrike authoritative game-server as a single
+# free web service. Render injects $PORT and terminates TLS, so browsers reach it at
+# wss://<service>.onrender.com. WebSocket upgrades pass through Render's proxy.
+#
+# Deploy: render.com → New → Blueprint → connect this repo. (Free plan sleeps after
+# ~15 min idle; first connection then waits ~30-50s for wake.)
+services:
+  - type: web
+    name: trapstrike-server
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: corepack enable && corepack pnpm install
+    startCommand: corepack pnpm run server
+    envVars:
+      - key: HOST
+        value: "0.0.0.0" # bind all interfaces so Render can reach it
+      - key: WT
+        value: "0" # WebSocket only (browser uses WS); no WebTransport/QUIC cert needed
+      - key: NODE_VERSION
+        value: "20"
+      # PORT is provided by Render automatically; the server reads process.env.PORT.

@@ -1,0 +1,61 @@
+# TrapStrike backend — single-box stack. `docker compose up --build` from infra/.
+#
+#   redis    — matchmaking queue + presence
+#   manager  — match-manager API; spawns one game-server process per match
+#   caddy    — TLS termination / reverse proxy for the matchmaking API
+#
+# Game-servers run as child processes inside the manager container, on ports in
+# PORT_BASE..PORT_BASE+PORT_COUNT-1 (published below for both WS/TCP and WT/UDP).
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  manager:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_URL: redis://redis:6379
+      MM_HOST: 0.0.0.0
+      MM_PORT: "9000"
+      PUBLIC_HOST: ${PUBLIC_HOST:-127.0.0.1} # the host clients use to reach game-servers
+      PORT_BASE: "8100"
+      PORT_COUNT: "20"
+      MATCH_SIZE: "10"
+      MIN_PLAYERS: "2"
+      MM_ENABLE_WT: "1"
+      ROUNDS: "3"
+      ROUND_MS: "60000"
+      WARMUP_MS: "30000"
+    ports:
+      - "9000:9000" # matchmaking API
+      - "8100-8119:8100-8119/tcp" # game-server WebSocket
+      - "8100-8119:8100-8119/udp" # game-server WebTransport (QUIC)
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    depends_on: [manager]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

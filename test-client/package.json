@@ -1,0 +1,13 @@
+{
+  "name": "test-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@fails-components/webtransport": "^1.6.3",
+    "@fails-components/webtransport-transport-http3-quiche": "^1.6.3",
+    "@trapstrike/protocol": "workspace:*",
+    "@trapstrike/shared": "workspace:*",
+    "ws": "^8.18.0"
+  }
+}
