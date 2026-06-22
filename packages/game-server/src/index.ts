@@ -5,8 +5,9 @@ import { Match } from "./match";
 import { MatchLifecycle } from "./lifecycle";
 import type { Transport, TransportConnection } from "./transport/types";
 import { WsTransport } from "./transport/ws-transport";
-import { WT_PATH, WtTransport } from "./transport/wt-transport";
-import { getDevCert } from "./transport/dev-cert";
+// WebTransport (native QUIC) is imported LAZILY inside main() only when WT is
+// enabled, so a WebSocket-only deploy (e.g. Render with WT=0) never loads or builds
+// the native @fails-components/webtransport module.
 
 const PORT = Number(process.env.PORT ?? 8080);
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -61,6 +62,11 @@ async function main(): Promise<void> {
   let wtUp = false;
   if (WT_ENABLED) {
     try {
+      // Lazy import — only reached when WT!=0, so WS-only hosts never touch native QUIC.
+      const [{ WT_PATH, WtTransport }, { getDevCert }] = await Promise.all([
+        import("./transport/wt-transport"),
+        import("./transport/dev-cert"),
+      ]);
       const cert = getDevCert();
       const wt = new WtTransport({
         port: PORT,

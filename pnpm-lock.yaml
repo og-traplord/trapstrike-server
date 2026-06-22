@@ -26,12 +26,6 @@ importers:
 
   packages/game-server:
     dependencies:
-      '@fails-components/webtransport':
-        specifier: ^1.6.3
-        version: 1.6.3
-      '@fails-components/webtransport-transport-http3-quiche':
-        specifier: ^1.6.3
-        version: 1.6.3
       '@trapstrike/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -41,6 +35,13 @@ importers:
       ws:
         specifier: ^8.18.0
         version: 8.21.0
+    optionalDependencies:
+      '@fails-components/webtransport':
+        specifier: ^1.6.3
+        version: 1.6.3
+      '@fails-components/webtransport-transport-http3-quiche':
+        specifier: ^1.6.3
+        version: 1.6.3
 
   packages/match-manager:
     dependencies:
