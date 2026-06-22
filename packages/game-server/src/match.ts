@@ -7,8 +7,6 @@ import {
   PROTOCOL_VERSION,
   RESPAWN_TICKS,
   SNAPSHOT_HZ,
-  SPAWN_ATTACK_FEET,
-  SPAWN_DEFEND_FEET,
   TICK_HZ,
   type Vec3,
   WEAPON_COOLDOWN_TICKS,
@@ -39,8 +37,6 @@ import { type ShotTarget, resolveShot } from "./combat";
 import { JitterBuffer } from "./jitter-buffer";
 import type { TransportConnection } from "./transport/types";
 
-const SPAWN_SPREAD_M = 3; // lateral spacing between teammates at a spawn
-
 interface SpawnPoint {
   x: number;
   y: number;
@@ -48,16 +44,20 @@ interface SpawnPoint {
   yaw: number;
 }
 
-/** Real Sandline spawns: team 0 = attackers (north back-alley, facing +z toward the
- *  sites), team 1 = defenders (south security gate, facing -z). Teammates spread
- *  laterally around the team's anchor. */
+/** Casual "play with friends" spawns: everyone drops into the SAME spot near mid
+ *  (open, flat lower-mid) in a tight cluster, so players see each other immediately
+ *  instead of starting ~170 m apart at opposite team ends. Friendly fire is on, so
+ *  it plays as a drop-in deathmatch. (A proper 5v5 round mode would restore the
+ *  attacker/defender end spawns — see SPAWN_ATTACK_FEET / SPAWN_DEFEND_FEET.) */
 function spawnFor(team: number, idxInTeam: number): SpawnPoint {
-  const a = team === 0 ? SPAWN_ATTACK_FEET : SPAWN_DEFEND_FEET;
+  const slot = (team * 5 + idxInTeam) % 10; // 0..9 across both teams
+  const col = slot % 5; // 5 across
+  const row = Math.floor(slot / 5); // 2 rows
   return {
-    x: a.x + (idxInTeam - 2) * SPAWN_SPREAD_M,
-    y: a.y,
-    z: a.z,
-    yaw: team === 0 ? Math.PI : 0, // attackers look south (+z), defenders look north (-z)
+    x: -6 + col * 3, // -6 … +6
+    y: 0, // mid is flat (groundH ≈ 0); settles to the floor on the first step
+    z: 8 + row * 4, // 8 or 12 — open lower-mid, clear of cover
+    yaw: 0,
   };
 }
 
