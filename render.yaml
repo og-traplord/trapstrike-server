@@ -9,7 +9,7 @@ services:
     name: trapstrike-server
     runtime: node
     plan: free
-    region: oregon
+    region: singapore
     buildCommand: corepack enable && corepack pnpm install
     startCommand: corepack pnpm run server
     envVars:
