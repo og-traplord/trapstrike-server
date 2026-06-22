@@ -153,6 +153,9 @@ class WtConnection implements TransportConnection {
   onMessage(cb: (data: Uint8Array) => void): void {
     this.msgCb = cb;
   }
+  onControl(_cb: (msg: unknown) => void): void {
+    // Lobby control over WebTransport not wired (browser uses WS for lobby).
+  }
   onClose(cb: () => void): void {
     this.closeCb = cb;
   }

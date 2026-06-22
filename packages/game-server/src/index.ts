@@ -1,7 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { SNAPSHOT_DT_MS, TICK_DT_MS, TICK_DT_S, TICK_HZ } from "@trapstrike/shared";
-import { MsgType, decodeInputCmd } from "@trapstrike/protocol";
-import { Match } from "./match";
+import { Room } from "./room";
 import { MatchLifecycle } from "./lifecycle";
 import type { Transport, TransportConnection } from "./transport/types";
 import { WsTransport } from "./transport/ws-transport";
@@ -32,44 +31,24 @@ function sanitizeRoom(code?: string): string {
 }
 
 async function main(): Promise<void> {
-  // One server hosts many independent matches keyed by room passcode. Players who
-  // connect with the same `?room=CODE` share a match; different codes are isolated.
-  const rooms = new Map<string, Match>();
-  const getRoom = (code: string): Match => {
-    let m = rooms.get(code);
-    if (!m) {
-      m = new Match();
-      rooms.set(code, m);
+  // One server hosts many independent rooms keyed by passcode. Each Room is a
+  // lobby→match state machine; same `?room=CODE` = same room, different = isolated.
+  const rooms = new Map<string, Room>();
+  const getRoom = (code: string): Room => {
+    let r = rooms.get(code);
+    if (!r) {
+      r = new Room(code);
+      rooms.set(code, r);
       console.log(`[server] room created: ${code} (rooms=${rooms.size})`);
     }
-    return m;
+    return r;
   };
   let nextConnId = 1;
   const allocId = (): number => nextConnId++;
 
   const wire = (conn: TransportConnection): void => {
     const code = sanitizeRoom(conn.room);
-    const match = getRoom(code);
-    const id = match.addPlayer(conn);
-    console.log(`[server] player ${id} joined room ${code} via ${conn.kind} (players=${match.playerCount})`);
-    conn.onMessage((data) => {
-      if (data.length === 0) return;
-      if (data[0] === MsgType.InputCmd) {
-        try {
-          match.onInput(id, decodeInputCmd(data));
-        } catch (err) {
-          console.warn(`[server] bad InputCmd from ${id}:`, (err as Error).message);
-        }
-      }
-    });
-    conn.onClose(() => {
-      match.removePlayer(id);
-      console.log(`[server] player ${id} left room ${code} (players=${match.playerCount})`);
-      if (match.playerCount === 0 && code !== DEFAULT_ROOM) {
-        rooms.delete(code);
-        console.log(`[server] room emptied: ${code} (rooms=${rooms.size})`);
-      }
-    });
+    getRoom(code).addConn(conn); // Room owns onMessage/onControl/onClose for this connection
   };
 
   const transports: Transport[] = [];
@@ -147,7 +126,10 @@ async function main(): Promise<void> {
     if (now - lastLog >= 1000) {
       const hz = (ticksThisWindow * 1000) / (now - lastLog);
       let players = 0;
-      for (const m of rooms.values()) players += m.playerCount;
+      for (const [code, r] of rooms) {
+        players += r.playerCount;
+        if (r.playerCount === 0 && code !== DEFAULT_ROOM) rooms.delete(code); // reap empties
+      }
       console.log(`[server] tick=${tick} rate=${hz.toFixed(1)}Hz rooms=${rooms.size} players=${players}`);
       ticksThisWindow = 0;
       lastLog = now;
@@ -170,7 +152,7 @@ async function main(): Promise<void> {
   // match-manager reaps it and frees the port (TEARDOWN).
   if (LIFECYCLE) {
     new MatchLifecycle(
-      getRoom(DEFAULT_ROOM),
+      getRoom(DEFAULT_ROOM).startEmptyMatch(),
       {
         matchId: MATCH_ID,
         expectedPlayers: EXPECTED_PLAYERS,

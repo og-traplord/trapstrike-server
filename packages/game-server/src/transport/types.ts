@@ -15,6 +15,8 @@ export interface TransportConnection {
   sendControl(msg: object): void;
   /** Inbound binary game packets from this client. */
   onMessage(cb: (data: Uint8Array) => void): void;
+  /** Inbound JSON control frames from this client — lobby only (team/ready/start). */
+  onControl(cb: (msg: unknown) => void): void;
   onClose(cb: () => void): void;
   close(): void;
 }

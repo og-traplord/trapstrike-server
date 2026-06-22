@@ -51,6 +51,7 @@ export class WsTransport implements Transport {
 class WsConnection implements TransportConnection {
   readonly kind = "ws" as const;
   private msgCb?: (data: Uint8Array) => void;
+  private ctrlCb?: (msg: unknown) => void;
   private closeCb?: () => void;
 
   constructor(
@@ -60,8 +61,16 @@ class WsConnection implements TransportConnection {
   ) {
     ws.binaryType = "nodebuffer";
     ws.on("message", (data, isBinary) => {
-      if (isBinary) this.msgCb?.(data as Buffer);
-      // text frames are client control/handshake — none in M1
+      if (isBinary) {
+        this.msgCb?.(data as Buffer);
+      } else {
+        // text frame = JSON lobby control (team/ready/start)
+        try {
+          this.ctrlCb?.(JSON.parse(data.toString()));
+        } catch {
+          /* ignore malformed control */
+        }
+      }
     });
     ws.on("close", () => this.closeCb?.());
     ws.on("error", () => {
@@ -86,6 +95,10 @@ class WsConnection implements TransportConnection {
 
   onMessage(cb: (data: Uint8Array) => void): void {
     this.msgCb = cb;
+  }
+
+  onControl(cb: (msg: unknown) => void): void {
+    this.ctrlCb = cb;
   }
 
   onClose(cb: () => void): void {

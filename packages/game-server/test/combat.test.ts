@@ -84,6 +84,7 @@ class FakeConn implements TransportConnection {
   }
   sendControl(): void {}
   onMessage(): void {}
+  onControl(): void {}
   onClose(): void {}
   close(): void {}
 }

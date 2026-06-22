@@ -170,9 +170,10 @@ export class Match {
     this.emitEvent(ev);
   }
 
-  addPlayer(conn: TransportConnection): number {
+  addPlayer(conn: TransportConnection, forcedTeam?: number): number {
     const id = this.nextEntityId++;
-    const team = this.players.size % 2; // alternate → 5v5 for 10 players
+    // Lobby picks the team; otherwise alternate (→ 5v5 for 10 players).
+    const team = forcedTeam === 0 || forcedTeam === 1 ? forcedTeam : this.players.size % 2;
     let idxInTeam = 0;
     for (const p of this.players.values()) if (p.team === team) idxInTeam++;
     const spawn = spawnFor(team, idxInTeam);
