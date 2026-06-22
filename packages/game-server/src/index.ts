@@ -25,14 +25,33 @@ const ROUND_MS = Number(process.env.ROUND_MS ?? 8_000);
 const INTERMISSION_MS = Number(process.env.INTERMISSION_MS ?? 1_500);
 const HARD_TIMEOUT_MS = Number(process.env.HARD_TIMEOUT_MS ?? 30_000);
 
+const DEFAULT_ROOM = "MAIN";
+function sanitizeRoom(code?: string): string {
+  const c = (code ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12);
+  return c || DEFAULT_ROOM;
+}
+
 async function main(): Promise<void> {
-  const match = new Match();
+  // One server hosts many independent matches keyed by room passcode. Players who
+  // connect with the same `?room=CODE` share a match; different codes are isolated.
+  const rooms = new Map<string, Match>();
+  const getRoom = (code: string): Match => {
+    let m = rooms.get(code);
+    if (!m) {
+      m = new Match();
+      rooms.set(code, m);
+      console.log(`[server] room created: ${code} (rooms=${rooms.size})`);
+    }
+    return m;
+  };
   let nextConnId = 1;
   const allocId = (): number => nextConnId++;
 
   const wire = (conn: TransportConnection): void => {
+    const code = sanitizeRoom(conn.room);
+    const match = getRoom(code);
     const id = match.addPlayer(conn);
-    console.log(`[server] player ${id} connected via ${conn.kind} (players=${match.playerCount})`);
+    console.log(`[server] player ${id} joined room ${code} via ${conn.kind} (players=${match.playerCount})`);
     conn.onMessage((data) => {
       if (data.length === 0) return;
       if (data[0] === MsgType.InputCmd) {
@@ -45,7 +64,11 @@ async function main(): Promise<void> {
     });
     conn.onClose(() => {
       match.removePlayer(id);
-      console.log(`[server] player ${id} disconnected (players=${match.playerCount})`);
+      console.log(`[server] player ${id} left room ${code} (players=${match.playerCount})`);
+      if (match.playerCount === 0 && code !== DEFAULT_ROOM) {
+        rooms.delete(code);
+        console.log(`[server] room emptied: ${code} (rooms=${rooms.size})`);
+      }
     });
   };
 
@@ -108,14 +131,14 @@ async function main(): Promise<void> {
 
     let steps = 0;
     while (acc >= TICK_DT_MS && steps < MAX_CATCHUP_STEPS) {
-      match.step(TICK_DT_S, tick);
+      for (const m of rooms.values()) m.step(TICK_DT_S, tick);
       ticksThisWindow++;
       acc -= TICK_DT_MS;
       steps++;
       snapAcc += TICK_DT_MS;
       if (snapAcc >= SNAPSHOT_DT_MS) {
         snapAcc -= SNAPSHOT_DT_MS;
-        match.broadcastSnapshots(tick);
+        for (const m of rooms.values()) m.broadcastSnapshots(tick);
       }
       tick++;
     }
@@ -123,7 +146,9 @@ async function main(): Promise<void> {
 
     if (now - lastLog >= 1000) {
       const hz = (ticksThisWindow * 1000) / (now - lastLog);
-      console.log(`[server] tick=${tick} rate=${hz.toFixed(1)}Hz players=${match.playerCount}`);
+      let players = 0;
+      for (const m of rooms.values()) players += m.playerCount;
+      console.log(`[server] tick=${tick} rate=${hz.toFixed(1)}Hz rooms=${rooms.size} players=${players}`);
       ticksThisWindow = 0;
       lastLog = now;
     }
@@ -145,7 +170,7 @@ async function main(): Promise<void> {
   // match-manager reaps it and frees the port (TEARDOWN).
   if (LIFECYCLE) {
     new MatchLifecycle(
-      match,
+      getRoom(DEFAULT_ROOM),
       {
         matchId: MATCH_ID,
         expectedPlayers: EXPECTED_PLAYERS,

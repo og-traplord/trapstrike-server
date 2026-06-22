@@ -5,6 +5,8 @@ export interface TransportConnection {
   readonly id: number;
   /** Which transport this client arrived on — informational (logging/metrics). */
   readonly kind: "ws" | "wt";
+  /** Room/passcode from the connect URL (`?room=CODE`) — groups players into matches. */
+  readonly room?: string;
   /** State that may be dropped/superseded — snapshots. (M5: WebTransport datagrams.) */
   sendUnreliable(data: Uint8Array): void;
   /** Must-not-drop, ordered — events (hit/kill). (M5: WebTransport reliable stream.) */

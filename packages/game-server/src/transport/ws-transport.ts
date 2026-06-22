@@ -25,8 +25,16 @@ export class WsTransport implements Transport {
   start(): Promise<void> {
     return new Promise((resolve) => {
       this.wss = new WebSocketServer({ port: this.opts.port, host: this.opts.host });
-      this.wss.on("connection", (ws) => {
-        this.connectionCb?.(new WsConnection(this.allocId(), ws));
+      this.wss.on("connection", (ws, request) => {
+        // Room/passcode from the connect URL: wss://host/?room=ABC
+        let room: string | undefined;
+        try {
+          const q = (request.url ?? "").split("?")[1] ?? "";
+          room = new URLSearchParams(q).get("room") ?? undefined;
+        } catch {
+          /* no room → default */
+        }
+        this.connectionCb?.(new WsConnection(this.allocId(), ws, room));
       });
       this.wss.on("listening", () => resolve());
     });
@@ -48,6 +56,7 @@ class WsConnection implements TransportConnection {
   constructor(
     public readonly id: number,
     private readonly ws: WebSocket,
+    public readonly room?: string,
   ) {
     ws.binaryType = "nodebuffer";
     ws.on("message", (data, isBinary) => {
