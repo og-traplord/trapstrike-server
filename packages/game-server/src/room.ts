@@ -1,15 +1,20 @@
-import { MsgType, decodeInputCmd } from "@trapstrike/protocol";
 import { Match } from "./match";
 import type { TransportConnection } from "./transport/types";
 
 // A Room is a passcode-keyed space with two phases:
 //   LOBBY  — players gather, pick a team, ready up; the host presses GO.
-//   MATCH  — the authoritative Match runs (movement + combat today; rounds/bots later).
-// Lobby messaging is JSON control frames (Law 3: JSON for lobby/handshake). When the
-// match starts, each connection's binary InputCmd channel is wired to the Match and the
-// client switches to the game on the `welcome` control it receives from Match.addPlayer.
+//   MATCH  — HOST-AUTHORITATIVE: the host's browser runs the whole game (the original
+//            Engine: bots, rounds, reload, plant/defuse) and STREAMS it to joiners.
+//            The server only RELAYS: host → all joiners (snapshots/events as-is), and
+//            each joiner → host (their input, tagged with [0xF0][senderId] so the host
+//            knows whose it is). Everyone sees the SAME bots / 5v5.
+//
+// Lobby messaging is JSON control frames (Law 3). The server never simulates the match
+// here (that's the host) — the Match class is used only by the LIFECYCLE/M6 demo path.
 
-interface LobbyPlayer {
+const RELAY_INPUT = 0xf0; // server→host envelope tag (must match the client constant)
+
+interface RoomPlayer {
   conn: TransportConnection;
   id: number;
   name: string;
@@ -20,45 +25,53 @@ interface LobbyPlayer {
 export class Room {
   readonly code: string;
   phase: "lobby" | "match" = "lobby";
-  match: Match | null = null;
+  match: Match | null = null; // LIFECYCLE/demo only
 
-  private lobby = new Map<number, LobbyPlayer>();
+  private players = new Map<number, RoomPlayer>();
   private hostId = -1;
-  private matchIdByConn = new Map<number, number>();
 
   constructor(code: string) {
     this.code = code;
   }
 
   get playerCount(): number {
-    return this.phase === "match" && this.match ? this.match.playerCount : this.lobby.size;
+    return this.match ? this.match.playerCount : this.players.size;
   }
 
-  /** A new connection arrives at this room. */
   addConn(conn: TransportConnection): void {
     conn.onClose(() => this.removeConn(conn.id));
 
-    if (this.phase === "match" && this.match) {
-      // Join in progress — drop straight into the running match (auto team).
-      this.joinMatch(conn);
-      console.log(`[room ${this.code}] ${conn.id} joined match in progress`);
+    if (this.match) {
+      // LIFECYCLE/demo path: straight into the server-sim match.
+      this.match.addPlayer(conn);
       return;
     }
 
     if (this.hostId < 0) this.hostId = conn.id;
     let t0 = 0;
     let t1 = 0;
-    for (const p of this.lobby.values()) p.team === 0 ? t0++ : t1++;
-    const lp: LobbyPlayer = { conn, id: conn.id, name: `P${conn.id}`, team: t0 <= t1 ? 0 : 1, ready: false };
-    this.lobby.set(conn.id, lp);
-    conn.onControl((msg) => this.onLobbyControl(conn.id, msg));
-    console.log(`[room ${this.code}] ${conn.id} joined lobby (size=${this.lobby.size}, host=${this.hostId})`);
-    this.broadcastLobby();
+    for (const p of this.players.values()) p.team === 0 ? t0++ : t1++;
+    const rp: RoomPlayer = { conn, id: conn.id, name: `P${conn.id}`, team: t0 <= t1 ? 0 : 1, ready: false };
+    this.players.set(conn.id, rp);
+
+    if (this.phase === "match") {
+      // Join in progress — relay this joiner immediately + tell the host to add them.
+      this.sendMatchStart(rp);
+      this.wireRelay(rp);
+      this.broadcastRoster();
+      console.log(`[room ${this.code}] ${conn.id} joined match in progress`);
+    } else {
+      conn.onControl((msg) => this.onLobbyControl(conn.id, msg));
+      console.log(`[room ${this.code}] ${conn.id} joined lobby (size=${this.players.size}, host=${this.hostId})`);
+      this.broadcastLobby();
+    }
   }
+
+  // --- lobby ---
 
   private onLobbyControl(id: number, msg: unknown): void {
     if (this.phase !== "lobby") return;
-    const p = this.lobby.get(id);
+    const p = this.players.get(id);
     if (!p) return;
     const m = msg as { t?: string; name?: string; team?: number; ready?: boolean };
     switch (m.t) {
@@ -73,88 +86,111 @@ export class Room {
         break;
       case "start":
         if (id === this.hostId) this.tryStart();
-        return; // tryStart broadcasts/transitions
+        return;
     }
     this.broadcastLobby();
   }
 
   private tryStart(): void {
-    if (this.lobby.size < 1) return;
-    for (const p of this.lobby.values()) if (!p.ready) return; // everyone must be ready
+    if (this.players.size < 1) return;
+    for (const p of this.players.values()) if (!p.ready) return;
     this.startMatch();
   }
 
-  private startMatch(): void {
-    const match = new Match();
-    this.match = match;
-    this.phase = "match";
-    // Tell lobby clients we're going live, THEN add each to the match (which sends
-    // the per-player `welcome` that flips the client into the game).
-    for (const p of this.lobby.values()) p.conn.sendControl({ t: "matchStart", room: this.code });
-    for (const p of this.lobby.values()) {
-      const mid = match.addPlayer(p.conn, p.team);
-      this.matchIdByConn.set(p.id, mid);
-      this.wireInput(p.conn, mid);
+  private broadcastLobby(): void {
+    const players = [...this.players.values()].map((p) => ({ id: p.id, name: p.name, team: p.team, ready: p.ready }));
+    const canStart = players.length > 0 && players.every((p) => p.ready);
+    for (const p of this.players.values()) {
+      p.conn.sendControl({ t: "lobby", room: this.code, you: p.id, host: this.hostId, canStart, players });
     }
-    console.log(`[room ${this.code}] MATCH START with ${this.lobby.size} players`);
   }
 
-  /** A late connection joins a running match (no team choice — auto-balanced). */
-  private joinMatch(conn: TransportConnection): void {
-    const mid = this.match!.addPlayer(conn);
-    this.matchIdByConn.set(conn.id, mid);
-    this.wireInput(conn, mid);
+  // --- host-authoritative match (relay) ---
+
+  private startMatch(): void {
+    this.phase = "match";
+    for (const p of this.players.values()) {
+      this.sendMatchStart(p);
+      this.wireRelay(p);
+    }
+    console.log(`[room ${this.code}] MATCH START (host-authoritative) — host=${this.hostId}, ${this.players.size} players`);
   }
 
-  private wireInput(conn: TransportConnection, matchId: number): void {
-    conn.onMessage((data) => {
-      if (data.length === 0) return;
-      if (data[0] === MsgType.InputCmd) {
-        try {
-          this.match!.onInput(matchId, decodeInputCmd(data));
-        } catch {
-          /* drop malformed input */
-        }
+  /** Tell a player the match is starting + who's in it (host builds entities from this). */
+  private sendMatchStart(p: RoomPlayer): void {
+    p.conn.sendControl({
+      t: "matchStart",
+      room: this.code,
+      you: p.id,
+      host: this.hostId,
+      isHost: p.id === this.hostId,
+      roster: [...this.players.values()].map((q) => ({ id: q.id, name: q.name, team: q.team })),
+    });
+  }
+
+  private broadcastRoster(): void {
+    const roster = [...this.players.values()].map((q) => ({ id: q.id, name: q.name, team: q.team }));
+    // Host needs the updated roster to add/drop entities; joiners can ignore.
+    this.players.get(this.hostId)?.conn.sendControl({ t: "roster", host: this.hostId, roster });
+  }
+
+  /** Relay wiring for one connection in the match. */
+  private wireRelay(p: RoomPlayer): void {
+    const isHost = p.id === this.hostId;
+    p.conn.onMessage((data) => {
+      if (isHost) {
+        // Host's stream (snapshots/events) → every joiner, as-is.
+        for (const q of this.players.values()) if (q.id !== this.hostId) q.conn.sendUnreliable(data);
+      } else {
+        // Joiner's input → host, tagged with [0xF0][senderId u16].
+        const host = this.players.get(this.hostId);
+        if (!host) return;
+        const framed = new Uint8Array(3 + data.length);
+        framed[0] = RELAY_INPUT;
+        framed[1] = p.id & 0xff;
+        framed[2] = (p.id >> 8) & 0xff;
+        framed.set(data, 3);
+        host.conn.sendUnreliable(framed);
+      }
+    });
+    p.conn.onControl((msg) => {
+      // In-match JSON (e.g. host round/killfeed events) → relay the same way.
+      if (isHost) {
+        for (const q of this.players.values()) if (q.id !== this.hostId) q.conn.sendControl(msg as object);
+      } else {
+        this.players.get(this.hostId)?.conn.sendControl({ t: "relay", from: p.id, msg });
       }
     });
   }
 
   removeConn(id: number): void {
-    if (this.match) {
-      const mid = this.matchIdByConn.get(id);
-      if (mid !== undefined) {
-        this.match.removePlayer(mid);
-        this.matchIdByConn.delete(id);
+    if (this.match) this.match.removePlayer(id);
+    const existed = this.players.delete(id);
+    if (id === this.hostId) {
+      // Host left. In match: the match is over (host owned the sim). In lobby: hand off.
+      const next = this.players.keys().next();
+      this.hostId = next.done ? -1 : next.value;
+      if (this.phase === "match" && existed) {
+        for (const q of this.players.values()) q.conn.sendControl({ t: "hostLeft" });
       }
     }
-    const wasInLobby = this.lobby.delete(id);
-    if (id === this.hostId) {
-      const next = this.lobby.keys().next();
-      this.hostId = next.done ? -1 : next.value;
-    }
-    if (this.phase === "lobby" && wasInLobby) this.broadcastLobby();
+    if (this.phase === "lobby" && existed) this.broadcastLobby();
+    else if (this.phase === "match" && existed) this.broadcastRoster();
   }
 
-  private broadcastLobby(): void {
-    const players = [...this.lobby.values()].map((p) => ({ id: p.id, name: p.name, team: p.team, ready: p.ready }));
-    const canStart = players.length > 0 && players.every((p) => p.ready);
-    for (const p of this.lobby.values()) {
-      p.conn.sendControl({ t: "lobby", room: this.code, you: p.id, host: this.hostId, canStart, players });
-    }
-  }
-
-  /** LIFECYCLE/M6-demo only: skip the lobby and run a match immediately. */
+  /** LIFECYCLE/M6-demo only: skip the lobby and run a server-sim match immediately. */
   startEmptyMatch(): Match {
     this.match = new Match();
     this.phase = "match";
     return this.match;
   }
 
-  // --- match tick passthrough (no-op while in lobby) ---
+  // The server doesn't tick host-authoritative rooms (the host drives the game). These
+  // only do work for the LIFECYCLE/demo Match.
   step(dt: number, tick: number): void {
-    if (this.phase === "match" && this.match) this.match.step(dt, tick);
+    if (this.match) this.match.step(dt, tick);
   }
   broadcastSnapshots(tick: number): void {
-    if (this.phase === "match" && this.match) this.match.broadcastSnapshots(tick);
+    if (this.match) this.match.broadcastSnapshots(tick);
   }
 }
